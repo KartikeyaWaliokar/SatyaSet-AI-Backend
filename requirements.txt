@@ -1,11 +1,10 @@
---extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.2.0+cpu
 fastapi
 uvicorn
 pydantic
 requests
 beautifulsoup4
 transformers
+torch
 pillow
 numpy
 easyocr
