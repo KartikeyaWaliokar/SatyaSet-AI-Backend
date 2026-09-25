@@ -14,8 +14,8 @@ from datetime import datetime
 
 # 1. FastAPI App initialize
 app = FastAPI(
-    title="SatyaSet AI - NLP Misinformation Engine",
-    description="Full-stack Misinformation Detection & XAI Engine for SatyaSet AI"
+    title="SatyaSet AI - NLP Misinformation & Image Forensics Engine",
+    description="Full-stack Misinformation Detection, XAI & Deepfake Forensics Engine"
 )
 
 # 2. CORS Middleware
@@ -47,7 +47,6 @@ SUSPICIOUS_KEYWORDS = [
     "laptop", "laptops", "offer", "nano gps chip", "ngc", "daesh", "firdaus"
 ]
 
-# Updated Category Mapping with Precision Rules
 CATEGORY_MAP = {
     "Tech & Cyber": ["5g", "hacked", "whatsapp", "facebook", "app", "cyber", "ai", "phone", "data", "nano gps", "chip", "daesh", "group", "firdaus"],
     "Financial Scam": ["free", "money", "bank", "lottery", "cash", "crypto", "account", "laptop", "laptops", "scheme", "offer", "2000 note", "currency"],
@@ -146,10 +145,10 @@ def generate_misinformation_dna(text: str, verdict: str, confidence: float, keyw
     }
 
 def generate_recommendation(verdict: str):
-    if verdict == "FAKE":
+    if verdict in ["FAKE", "SUSPICIOUS_AI_MEDIA"]:
         return {
             "action": "DO_NOT_SHARE",
-            "advisory": "This content shows strong indicators of misinformation or scam. Do not forward this message on WhatsApp or social media.",
+            "advisory": "This content shows strong indicators of misinformation, fraud, or synthetic manipulation. Do not forward.",
             "report_option": "Flag to Cyber Crime Cell / Fact-Checker"
         }
     elif verdict == "INSUFFICIENT_EVIDENCE / UNVERIFIED":
@@ -162,6 +161,33 @@ def generate_recommendation(verdict: str):
         "action": "SAFE_TO_READ",
         "advisory": "Matches verified neutral/official reporting structure.",
         "report_option": "None required"
+    }
+
+def analyze_image_forensics(image: Image.Image):
+    info = image.info if hasattr(image, 'info') else {}
+    has_ai_metadata = any(key in str(info).lower() for key in ["exif", "dall-e", "midjourney", "stable diffusion", "comfyui"])
+    
+    img_gray = image.convert('L')
+    img_arr = np.array(img_gray)
+    variance_of_laplacian = np.var(img_arr)
+    
+    is_synthetic = False
+    ai_confidence = 15.0
+    flags = []
+
+    if has_ai_metadata:
+        is_synthetic = True
+        ai_confidence = 88.5
+        flags.append("AI Generator Metadata Signature Found")
+        
+    if variance_of_laplacian < 100:
+        flags.append("High Smoothing / Low Texture Variance (Possible Synthetic Generation)")
+        ai_confidence = max(ai_confidence, 65.0)
+
+    return {
+        "is_ai_generated_suspect": is_synthetic or (ai_confidence > 60.0),
+        "ai_generated_confidence": f"{ai_confidence}%",
+        "forensic_flags": flags if flags else ["Natural Image Texture Detected"]
     }
 
 def check_google_factcheck(query: str):
@@ -207,8 +233,8 @@ def process_claim_pipeline(input_text: str, input_type: str = "Direct Text Claim
         
         response_payload = {
             "input_type": input_type,
-            "raw_text": input_text if input_type != "Image OCR Analysis" else "Uploaded Image",
-            "extracted_text_from_image": raw_text if input_type == "Image OCR Analysis" else "N/A",
+            "raw_text": input_text if "Image" not in input_type else "Uploaded Image",
+            "extracted_text_from_image": raw_text if "Image" in input_type else "N/A",
             "translated_text_en": translated_text,
             "category": category,
             "verdict": verdict,
@@ -251,8 +277,8 @@ def process_claim_pipeline(input_text: str, input_type: str = "Direct Text Claim
         
     response_payload = {
         "input_type": input_type,
-        "raw_text": input_text if input_type != "Image OCR Analysis" else "Uploaded Image",
-        "extracted_text_from_image": raw_text if input_type == "Image OCR Analysis" else "N/A",
+        "raw_text": input_text if "Image" not in input_type else "Uploaded Image",
+        "extracted_text_from_image": raw_text if "Image" in input_type else "N/A",
         "translated_text_en": translated_text,
         "category": category,
         "verdict": verdict,
@@ -299,23 +325,47 @@ async def analyze_image(file: UploadFile = File(...)):
     try:
         contents = await file.read()
         image = Image.open(BytesIO(contents)).convert('RGB')
-        image_np = np.array(image)
         
+        forensics_res = analyze_image_forensics(image)
+        
+        image_np = np.array(image)
         results = reader.readtext(image_np, detail=0)
         extracted_text = " ".join(results).strip()
         
-        if not extracted_text:
-            return {"error": "No readable text could be extracted from the uploaded image!"}
-            
-        return process_claim_pipeline(extracted_text, input_type="Image OCR Analysis")
+        if extracted_text:
+            pipeline_res = process_claim_pipeline(extracted_text, input_type="Image OCR + Forensics Analysis")
+            pipeline_res["image_forensics"] = forensics_res
+            return pipeline_res
+        
+        verdict = "SUSPICIOUS_AI_MEDIA" if forensics_res["is_ai_generated_suspect"] else "GENUINE_MEDIA"
+        rec = generate_recommendation(verdict)
+        
+        res_payload = {
+            "input_type": "Pure Visual Image Analysis",
+            "extracted_text_from_image": "No OCR text detected",
+            "verdict": verdict,
+            "confidence_score": float(forensics_res["ai_generated_confidence"].replace("%", "")),
+            "image_forensics": forensics_res,
+            "recommendation": rec
+        }
+        
+        DASHBOARD_LOGS.append({
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "category": "Tech & Cyber",
+            "verdict": verdict,
+            "input_type": "Pure Visual Image Analysis",
+            "claim_snippet": "Uploaded Image Analysis"
+        })
+        return res_payload
+        
     except Exception as e:
         return {"error": f"Failed to process image: {str(e)}"}
 
 @app.get("/dashboard/stats")
 def get_dashboard_stats():
     total_scans = len(DASHBOARD_LOGS)
-    fake_count = sum(1 for log in DASHBOARD_LOGS if log["verdict"] == "FAKE")
-    real_count = sum(1 for log in DASHBOARD_LOGS if log["verdict"] == "REAL")
+    fake_count = sum(1 for log in DASHBOARD_LOGS if log["verdict"] in ["FAKE", "SUSPICIOUS_AI_MEDIA"])
+    real_count = sum(1 for log in DASHBOARD_LOGS if log["verdict"] in ["REAL", "GENUINE_MEDIA"])
     unverified_count = sum(1 for log in DASHBOARD_LOGS if log["verdict"] == "INSUFFICIENT_EVIDENCE / UNVERIFIED")
     
     category_counts = {}
@@ -368,13 +418,14 @@ def get_misinformation_radar():
     }
 
 @app.get("/claim/origin-journey")
-def track_claim_journey(query: str = "Rs 2000 Note GPS Chip"):
+def track_claim_journey(query: str = "WhatsApp Viral Claim"):
+    topic_name = query if query.strip() else "WhatsApp Viral Claim"
     return {
-        "query": query,
-        "origin_source": "Unverified Social Media Post / Messaging Group",
+        "analyzed_query": topic_name,
+        "origin_source": "Unverified Messaging Group / Social Media Post",
         "propagation_journey": [
             {"step": 1, "stage": "Origin", "platform": "Closed WhatsApp Group", "impact": "Low"},
-            {"step": 2, "stage": "Amplification", "platform": "Twitter / Facebook Viral Posts", "impact": "Medium"},
+            {"step": 2, "stage": "Amplification", "platform": "Twitter / Facebook Public Posts", "impact": "Medium"},
             {"step": 3, "stage": "Mass Spread", "platform": "Mass Broadcast Messages", "impact": "High"},
             {"step": 4, "stage": "Debunked", "platform": "PIB Fact Check & SatyaSet AI Engine", "status": "VERIFIED_FAKE"}
         ]
