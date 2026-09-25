@@ -9,16 +9,13 @@ from pydantic import BaseModel
 from transformers import pipeline
 from PIL import Image
 import numpy as np
-import easyocr
 from datetime import datetime
 
-# 1. FastAPI App initialize
 app = FastAPI(
     title="SatyaSet AI - NLP Misinformation & Image Forensics Engine",
     description="Full-stack Misinformation Detection, XAI & Deepfake Forensics Engine"
 )
 
-# 2. CORS Middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -27,17 +24,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize EasyOCR Reader (CPU mode)
-print("Loading OCR Engine...")
-reader = easyocr.Reader(['en'], gpu=False)
-print("OCR Engine Loaded!")
-
-# 3. Transformer Model Load
 print("Loading NLP Model...")
 classifier = pipeline("text-classification", model="mrm8488/bert-tiny-finetuned-fake-news-detection")
 print("Model Loaded Successfully!")
 
-# In-Memory Analytics Database
 DASHBOARD_LOGS = []
 
 SUSPICIOUS_KEYWORDS = [
@@ -221,7 +211,6 @@ def process_claim_pipeline(input_text: str, input_type: str = "Direct Text Claim
     category = detect_category(search_query)
     highlighted_keywords = extract_suspicious_words(search_query)
     
-    # Layer 1: Google Fact Check API
     fact_check_res = check_google_factcheck(search_query)
     if fact_check_res["found"]:
         rating = fact_check_res["textual_rating"].upper()
@@ -258,7 +247,6 @@ def process_claim_pipeline(input_text: str, input_type: str = "Direct Text Claim
         })
         return response_payload
     
-    # Layer 2: Transformer Model
     result = classifier(search_query)[0]
     label = result['label']
     score = round(result['score'] * 100, 2)
@@ -327,22 +315,12 @@ async def analyze_image(file: UploadFile = File(...)):
         image = Image.open(BytesIO(contents)).convert('RGB')
         
         forensics_res = analyze_image_forensics(image)
-        
-        image_np = np.array(image)
-        results = reader.readtext(image_np, detail=0)
-        extracted_text = " ".join(results).strip()
-        
-        if extracted_text:
-            pipeline_res = process_claim_pipeline(extracted_text, input_type="Image OCR + Forensics Analysis")
-            pipeline_res["image_forensics"] = forensics_res
-            return pipeline_res
-        
         verdict = "SUSPICIOUS_AI_MEDIA" if forensics_res["is_ai_generated_suspect"] else "GENUINE_MEDIA"
         rec = generate_recommendation(verdict)
         
         res_payload = {
-            "input_type": "Pure Visual Image Analysis",
-            "extracted_text_from_image": "No OCR text detected",
+            "input_type": "Visual Image Forensics Analysis",
+            "extracted_text_from_image": "Visual analysis mode active",
             "verdict": verdict,
             "confidence_score": float(forensics_res["ai_generated_confidence"].replace("%", "")),
             "image_forensics": forensics_res,
@@ -353,7 +331,7 @@ async def analyze_image(file: UploadFile = File(...)):
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "category": "Tech & Cyber",
             "verdict": verdict,
-            "input_type": "Pure Visual Image Analysis",
+            "input_type": "Visual Image Forensics Analysis",
             "claim_snippet": "Uploaded Image Analysis"
         })
         return res_payload

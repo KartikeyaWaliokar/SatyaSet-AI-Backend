@@ -4,8 +4,7 @@ pydantic
 requests
 beautifulsoup4
 transformers
-torch
+torch --index-url https://download.pytorch.org/whl/cpu
 pillow
 numpy
-easyocr
 python-multipart
