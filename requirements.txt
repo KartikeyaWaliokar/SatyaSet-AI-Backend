@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+pydantic
+requests
+beautifulsoup4
+transformers
+torch
+pillow
+numpy
+easyocr
+python-multipart
